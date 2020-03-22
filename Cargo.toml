@@ -1,5 +1,50 @@
-[workspace]
-members = [
-	"forum-module",
-	"data-migration",
+[package]
+name = 'substrate-forum-module'
+version = '1.1.0'
+authors = ['Junius Zhou <junius.zhou@gmail.com>']
+edition = '2018'
+
+[dependencies]
+hex-literal = '0.1.0'
+serde = { version = '1.0.101', optional = true}
+serde_derive = { version = '1.0.101', optional = true }
+rstd = { package = 'sp-std', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+sp-runtime = { package = 'sp-runtime', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+frame-support = { package = 'frame-support', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+frame-support-procedural = { package = 'frame-support-procedural', git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+system = { package = 'frame-system', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+balances = { package = 'pallet-balances', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+codec = { package = 'parity-scale-codec', version = '1.2', default-features = false, features = ['derive'] }
+node-runtime = { package = 'node-runtime', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+
+[dependencies.timestamp]
+default_features = false
+git = 'https://github.com/paritytech/substrate.git'
+package = 'pallet-timestamp'
+rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'
+
+[dependencies.runtime-io]
+default_features = false
+git = 'https://github.com/paritytech/substrate.git'
+package = 'sp-io'
+rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'
+
+[dev-dependencies]
+runtime-io = { package = 'sp-io', default-features = false, git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+sp-core = { package = 'sp-core', git = 'https://github.com/paritytech/substrate.git', rev = '490c309ffc69ebd06fa3e99e3e4ac8ec3b4271d1'}
+
+[features]
+default = ['std']
+std = [
+	'serde',
+	'serde_derive',
+	'codec/std',
+	'rstd/std',
+	'runtime-io/std',
+	'sp-runtime/std',
+	'frame-support/std',
+	'system/std',
+	'balances/std',
+	'timestamp/std',
+	'node-runtime/std',
 ]

@@ -4,19 +4,36 @@
 use serde_derive::{Deserialize, Serialize};
 
 use codec::{Codec, Decode, Encode};
+use frame_support::storage::migration::{put_storage_value, StorageIterator};
 use frame_support::{
     decl_error, decl_event, decl_module, decl_storage,
-    dispatch::{DispatchError, DispatchResult},
-    ensure,
+    dispatch::DispatchResult,
     traits::{Currency, Get, LockableCurrency, ReservableCurrency},
     Parameter,
 };
 use rstd::prelude::*;
 use sp_runtime;
-use sp_runtime::traits::{MaybeSerialize, Member, One, Saturating, SimpleArithmetic};
+use sp_runtime::traits::{AtLeast32Bit, MaybeSerialize, Member, One, Saturating, Zero};
 
-// mod mock;
-// mod tests;
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;
+
+mod migration;
+
+/// Forum data storage version
+#[derive(Encode, Decode, Clone, Copy, PartialEq, Eq)]
+enum Releases {
+    V1_0_0,
+    V2_0_0,
+}
+
+impl Default for Releases {
+    fn default() -> Self {
+        Releases::V1_0_0
+    }
+}
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 
@@ -24,25 +41,29 @@ pub trait Trait: system::Trait + timestamp::Trait + Sized {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
     type ForumUserId: Parameter
         + Member
-        + SimpleArithmetic
+        + AtLeast32Bit
         + Codec
         + Default
         + Copy
         + MaybeSerialize
-        + PartialEq;
+        + PartialEq
+        + From<u64>
+        + Into<u64>;
 
     type ModeratorId: Parameter
         + Member
-        + SimpleArithmetic
+        + AtLeast32Bit
         + Codec
         + Default
         + Copy
         + MaybeSerialize
-        + PartialEq;
+        + PartialEq
+        + From<u64>
+        + Into<u64>;
 
     type CategoryId: Parameter
         + Member
-        + SimpleArithmetic
+        + AtLeast32Bit
         + Codec
         + Default
         + Copy
@@ -53,7 +74,7 @@ pub trait Trait: system::Trait + timestamp::Trait + Sized {
 
     type ThreadId: Parameter
         + Member
-        + SimpleArithmetic
+        + AtLeast32Bit
         + Codec
         + Default
         + Copy
@@ -64,7 +85,7 @@ pub trait Trait: system::Trait + timestamp::Trait + Sized {
 
     type PostId: Parameter
         + Member
-        + SimpleArithmetic
+        + AtLeast32Bit
         + Codec
         + Default
         + Copy
@@ -131,14 +152,100 @@ decl_error! {
 use system;
 use system::{ensure_root, ensure_signed};
 
-/// Represents a user's information in this forum.
+/// Moderation action structure in old version.
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
+pub struct OldModerationAction<AccountId, BlockNumber, Moment> {
+    /// When action occured.
+    pub moderated_at: BlockchainTimestamp<BlockNumber, Moment>,
+
+    /// Account forum sudo which acted.
+    pub moderator_account: AccountId,
+
+    /// Moderation rationale
+    pub rationale: Vec<u8>,
+}
+
+/// Post data structure in old version
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
+pub struct OldPost<AccountId, BlockNumber, Moment> {
+    /// Id of thread to which this post corresponds.
+    pub thread_id: u64,
+
+    /// Current text of post
+    pub text: Vec<u8>,
+
+    /// Possible moderation of this post
+    pub moderation: Option<OldModerationAction<AccountId, BlockNumber, Moment>>,
+
+    /// When post was submitted.
+    pub created_at: BlockchainTimestamp<BlockNumber, Moment>,
+
+    /// Author of post.
+    pub author_id: AccountId,
+
+    /// Post's position in thread
+    pub index_in_thread: u32,
+}
+
+/// Thread data structure in old vesion
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
+pub struct OldThread<AccountId, BlockNumber, Moment> {
+    /// Title
+    pub title: Vec<u8>,
+
+    /// Category in which this thread lives
+    pub category_id: u64,
+
+    /// Possible moderation of this thread
+    pub moderation: Option<OldModerationAction<AccountId, BlockNumber, Moment>>,
+
+    /// When thread was established.
+    pub created_at: BlockchainTimestamp<BlockNumber, Moment>,
+
+    /// Author of post.
+    pub author_id: AccountId,
+
+    /// Position in category.
+    pub index_in_category: u32,
+}
+
+/// Category data structure in old version
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
+#[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
+pub struct OldCategory<BlockNumber, Moment> {
+    /// Category identifier
+    pub parent_id: Option<u64>,
+
+    /// Title
+    pub title: Vec<u8>,
+
+    /// Description
+    pub description: Vec<u8>,
+
+    /// When category was established.
+    pub created_at: BlockchainTimestamp<BlockNumber, Moment>,
+
+    /// Whether category is deleted.
+    pub deleted: bool,
+
+    /// Whether category is archived.
+    pub archived: bool,
+
+    /// Position in parent category.
+    pub index_in_parent_category: u32,
+}
+
+/// Represents a user's information in this forum, introduced in new version
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
 #[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
 pub struct ForumUser<AccountId> {
     pub role_account: AccountId,
 }
 
-/// Represents a moderator in this forum.
+/// Represents a moderator in this forum, introduced in new version
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
 #[derive(Encode, Decode, Default, Clone, PartialEq, Eq)]
 pub struct Moderator<AccountId> {
@@ -179,7 +286,7 @@ pub struct Post<ForumUserId, ModeratorId, ThreadId, BlockNumber, Moment> {
     pub thread_id: ThreadId,
 
     /// Current text of post
-    pub current_text: Vec<u8>,
+    pub text: Vec<u8>,
 
     /// Possible moderation of this post
     pub moderation: Option<ModerationAction<ModeratorId, BlockNumber, Moment>>,
@@ -244,42 +351,42 @@ pub struct Category<CategoryId, BlockNumber, Moment> {
 }
 
 decl_storage! {
-    trait Store for Module<T: Trait> as Forum_1_1 {
+    trait Store for Module<T: Trait> as Forum {
         /// Map forum user identifier to forum user information.
-        pub ForumUserById get(forum_user_by_id) config(): map T::ForumUserId  => ForumUser<T::AccountId>;
+        pub ForumUserById get(forum_user_by_id) config(): map hasher(blake2_256) T::ForumUserId  => ForumUser<T::AccountId>;
 
         /// Forum user identifier value for next new forum user.
         pub NextForumUserId get(next_forum_user_id) config(): T::ForumUserId;
 
         /// Map forum moderator identifier to moderator information.
-        pub ModeratorById get(moderator_by_id) config(): map T::ModeratorId => Moderator<T::AccountId>;
+        pub ModeratorById get(moderator_by_id) config(): map hasher(blake2_256) T::ModeratorId => Moderator<T::AccountId>;
 
         /// Forum moderator identifier value for next new moderator user.
         pub NextModeratorId get(next_moderator_id) config(): T::ModeratorId;
 
         /// Map category identifier to corresponding category.
-        pub CategoryById get(category_by_id) config(): map T::CategoryId => Category<T::CategoryId, T::BlockNumber, T::Moment>;
+        pub CategoryById get(category_by_id) config(): map hasher(blake2_256) T::CategoryId => Category<T::CategoryId, T::BlockNumber, T::Moment>;
 
         /// Category identifier value to be used for the next Category created.
         pub NextCategoryId get(next_category_id) config(): T::CategoryId;
 
         /// All sub categories under a category
-        pub SubcategoriesById get(sub_categories_by_id) config(): map T::CategoryId => Vec<T::CategoryId>;
+        pub SubcategoriesById get(sub_categories_by_id) config(): map hasher(blake2_256) T::CategoryId => Vec<T::CategoryId>;
 
         /// All threads under a category
-        pub DirectThreadsById get(direct_threads_by_id) config(): map T::CategoryId => Vec<T::ThreadId>;
+        pub DirectThreadsById get(direct_threads_by_id) config(): map hasher(blake2_256) T::CategoryId => Vec<T::ThreadId>;
 
         /// Map thread identifier to corresponding thread.
-        pub ThreadById get(thread_by_id) config(): map T::ThreadId => Thread<T::ForumUserId, T::ModeratorId, T::CategoryId, T::BlockNumber, T::Moment>;
+        pub ThreadById get(thread_by_id) config(): map hasher(blake2_256) T::ThreadId => Thread<T::ForumUserId, T::ModeratorId, T::CategoryId, T::BlockNumber, T::Moment>;
 
         /// Thread identifier value to be used for next Thread in threadById.
         pub NextThreadId get(next_thread_id) config(): T::ThreadId;
 
         /// All posts under a thread
-        pub PostsByThreadId get(posts_by_thread_id) config(): map T::ThreadId => Vec<T::PostId>;
+        pub PostsByThreadId get(posts_by_thread_id) config(): map hasher(blake2_256) T::ThreadId => Vec<T::PostId>;
 
         /// Map post identifier to corresponding post.
-        pub PostById get(post_by_id) config(): map T::PostId => Post<T::ForumUserId, T::ModeratorId, T::ThreadId, T::BlockNumber, T::Moment>;
+        pub PostById get(post_by_id) config(): map hasher(blake2_256) T::PostId => Post<T::ForumUserId, T::ModeratorId, T::ThreadId, T::BlockNumber, T::Moment>;
 
         /// Post identifier value to be used for for next post created.
         pub NextPostId get(next_post_id) config(): T::PostId;
@@ -288,7 +395,7 @@ decl_storage! {
         pub ForumSudo get(forum_sudo) config(): Option<T::AccountId>;
 
         /// Moderator set for each Category
-        pub CategoryByModerator get(category_by_moderator) config(): double_map T::CategoryId, blake2_256(T::ModeratorId) => bool;
+        pub CategoryByModerator get(category_by_moderator) config(): double_map hasher(blake2_256) T::CategoryId, hasher(blake2_256) T::ModeratorId => bool;
 
         /// Input constraints for description text of category title.
         pub CategoryTitleConstraint get(category_title_constraint) config(): InputLengthConstraint;
@@ -304,6 +411,9 @@ decl_storage! {
 
         /// Input constraints for description text of moderation thread rationale.
         pub ModerationRationaleConstraint get(moderation_rationale_constraint) config(): InputLengthConstraint;
+
+        /// Storage version of forum pallet
+        StorageVersion build(|_: &GenesisConfig<T>| Releases::V2_0_0): Releases;
     }
 }
 
@@ -312,7 +422,7 @@ decl_event!(
     where
         <T as system::Trait>::AccountId,
         <T as Trait>::CategoryId,
-        <T as Trait>::ThreadId, 
+        <T as Trait>::ThreadId,
         <T as Trait>::PostId,
         <T as Trait>::ForumUserId,
         <T as Trait>::ModeratorId,
@@ -352,17 +462,27 @@ decl_event!(
 decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
         fn deposit_event() = default;
-        // Fee for create a thread
-        const DepositPerThread: BalanceOf<T> = T::DepositPerThread::get();
 
-        // Fee for create a post
-        const DepositPerPost: BalanceOf<T> = T::DepositPerPost::get();
+        /// Migration all data during runtime upgrade
+        fn on_runtime_upgrade() {
+            // Migrate all categories, threads and posts
+            let (forum_users, moderators) = migration::on_runtime_upgrade::<T>();
+            // Create forum users and moderators according data extract from old threads and posts
+            for (forum_user_account, forum_user_id) in forum_users.iter() {
+                <ForumUserById<T>>::insert(forum_user_id, ForumUser::<T::AccountId> {
+                    role_account: forum_user_account.clone(),
+                });
+            }
 
-        // Fee for store one byte in title
-        const DepositTitlePerByte: BalanceOf<T> = T::DepositTitlePerByte::get();
+            for (moderator_account, moderator_id) in moderators.iter() {
+                <ModeratorById<T>>::insert(moderator_id, Moderator::<T::AccountId> {
+                    role_account: moderator_account.clone(),
+                });
+            }
 
-        // Fee for store one byte in text
-        const DepositTextPerByte: BalanceOf<T> = T::DepositTextPerByte::get();
+            <NextForumUserId<T>>::set((forum_users.len() as u64).into());
+            <NextModeratorId<T>>::set((moderators.len() as u64).into());
+        }
 
         /// Set forum sudo.
         fn set_forum_sudo(origin, new_forum_sudo: Option<T::AccountId>) -> DispatchResult {
@@ -460,6 +580,7 @@ decl_module! {
         }
 
         /// Set category archived, then no new thread and post
+        // TODO archive recursively
         fn set_category_archived(origin, category_id: T::CategoryId,) -> DispatchResult {
             // Check that its a valid signature
             let who = ensure_signed(origin)?;
@@ -478,10 +599,8 @@ decl_module! {
             } else if category.archived {
                 Err(Error::<T>::CategoryAlreadyArchived.into())
             } else {
-                // Mutate category, and set possible new change parameters
-                <CategoryById<T>>::mutate(category_id, |c| {
-                        c.archived = true;
-                });
+                // Set category and all child categories archived
+                Self::set_category_archived_recursive(&category_id);
 
                 // Generate event
                 Self::deposit_event(RawEvent::CategoryArchieved(category_id));
@@ -490,7 +609,7 @@ decl_module! {
             }
         }
 
-        /// Update category
+        /// Delete will return reserved fee except the thread or post moderated
         fn set_category_deleted(origin, category_id: T::CategoryId,) -> DispatchResult {
             // Check that its a valid signature
             let who = ensure_signed(origin)?;
@@ -511,10 +630,32 @@ decl_module! {
                 <CategoryById<T>>::mutate(category_id, |c| {
                         c.deleted = true;
                 });
-    
+
                 // Generate event
                 Self::deposit_event(RawEvent::CategoryDeleted(category_id,));
-    
+
+                Ok(())
+            }
+        }
+
+         /// Settle a category after archived or deleted
+        fn unreserve_fee_category(origin, category_id: T::CategoryId,) -> DispatchResult {
+            // Check that its a valid signature
+            let who = ensure_signed(origin)?;
+
+            // Not signed by forum SUDO
+            Self::ensure_is_forum_sudo(&who)?;
+
+            // Make sure category existed.
+            Self::ensure_category_exists(&category_id)?;
+
+            // Get the category
+            let category = <CategoryById<T>>::get(category_id);
+
+            if category.deleted {
+                Err(Error::<T>::CategoryAlreadyDeteled.into())
+
+            } else {
                 Ok(())
             }
         }
@@ -533,6 +674,19 @@ decl_module! {
 
             // Create a new thread
             Self::add_new_thread(category_id, forum_user_id, &title, &text)?;
+
+            // Get fee for thread
+            let title_deposit_fee = T::DepositPerThread::get().saturating_add(
+                <BalanceOf<T>>::from(text.len() as u32).saturating_mul(T::DepositTitlePerByte::get()),
+            );
+
+            // Get fee for post
+            let text_deposit_fee = T::DepositPerPost::get().saturating_add(
+                <BalanceOf<T>>::from(text.len() as u32).saturating_mul(T::DepositTextPerByte::get()),
+            );
+
+            // Reserve fee for thread and post
+            <T as Trait>::Currency::reserve(&who, title_deposit_fee.saturating_add(text_deposit_fee))?;
 
             // Generate event
             Self::deposit_event(RawEvent::ThreadCreated(next_thread_id));
@@ -587,6 +741,14 @@ decl_module! {
             // Add new post
             Self::add_new_post(thread_id, &text, forum_user_id)?;
 
+            // Get fee for post
+            let text_deposit_fee = T::DepositPerPost::get().saturating_add(
+                <BalanceOf<T>>::from(text.len() as u32).saturating_mul(T::DepositTextPerByte::get()),
+            );
+
+            // Reserve fee for thread and post
+            <T as Trait>::Currency::unreserve(&who, text_deposit_fee);
+
             // Generate event
             Self::deposit_event(RawEvent::PostAdded(next_post_id));
 
@@ -616,20 +778,20 @@ decl_module! {
             } else {
                 // make sure origin can moderate the category
                 Self::ensure_thread_is_mutable(&post.thread_id)?;
-    
+
                 // Update moderation action on post
                 let moderation_action = ModerationAction{
                     moderated_at: Self::current_block_and_time(),
                     moderator_id: moderator_id,
                     rationale: rationale.clone()
                 };
-    
+
                 // Update post with moderation
                 <PostById<T>>::mutate(post_id, |p| p.moderation = Some(moderation_action));
-    
+
                 // Generate event
                 Self::deposit_event(RawEvent::PostModerated(post_id));
-    
+
                 Ok(())
             }
         }
@@ -637,6 +799,68 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+    // Set category and all child categories are archived
+    pub fn set_category_archived_recursive(category_id: &T::CategoryId) {
+        let category = <CategoryById<T>>::get(category_id);
+        if !category.deleted && !category.archived {
+            // Get all threads in the category
+            let thread_ids = <DirectThreadsById<T>>::get(category_id);
+
+            // Unreserve the currency for each thead and post if not moderated
+            thread_ids.iter().for_each(|thread_id| {
+                let thread = <ThreadById<T>>::get(thread_id);
+                if thread.moderation.is_none() {
+                    let fee = T::DepositPerThread::get().saturating_add(
+                        <BalanceOf<T>>::from(thread.title.len() as u32)
+                            .saturating_mul(T::DepositTitlePerByte::get()),
+                    );
+                    // Reserve fee for thread and post
+                    let thread_author_account = <ForumUserById<T>>::get(&thread.author_id);
+                    <T as Trait>::Currency::unreserve(&thread_author_account.role_account, fee);
+                }
+
+                let post_ids = <PostsByThreadId<T>>::get(thread_id);
+                post_ids
+                    .iter()
+                    .map(|post_id| <PostById<T>>::get(post_id))
+                    .filter(|post| post.moderation.is_none())
+                    .for_each(|post| {
+                        let post_author_account = <ForumUserById<T>>::get(post.author_id);
+                        // Get fee for post
+                        let text_deposit_fee = T::DepositPerPost::get().saturating_add(
+                            <BalanceOf<T>>::from(post.text.len() as u32)
+                                .saturating_mul(T::DepositTextPerByte::get()),
+                        );
+
+                        // Unreserve fee for post
+                        <T as Trait>::Currency::unreserve(
+                            &post_author_account.role_account,
+                            text_deposit_fee,
+                        );
+                    })
+            });
+
+            // Apply the same operation to all child categories
+            let child_categories = <SubcategoriesById<T>>::get(category_id);
+            <CategoryById<T>>::mutate(category_id, |value| value.archived = true);
+            child_categories
+                .iter()
+                .for_each(|id| Self::set_category_archived_recursive(id));
+        }
+    }
+
+    // Set category and all child categories are deleted
+    pub fn set_category_deleted_recursive(category_id: &T::CategoryId) {
+        let category = <CategoryById<T>>::get(category_id);
+        if !category.deleted {
+            let child_categories = <SubcategoriesById<T>>::get(category_id);
+            <CategoryById<T>>::mutate(category_id, |value| value.deleted = true);
+            child_categories
+                .iter()
+                .for_each(|id| Self::set_category_archived_recursive(id));
+        }
+    }
+
     // Interface to add a new thread, could be called by other runtime
     pub fn add_new_thread(
         category_id: T::CategoryId,
@@ -653,13 +877,8 @@ impl<T: Trait> Module<T> {
         // Validate post text
         Self::ensure_post_text_is_valid(&text)?;
 
-        // Compute the currency needed for thread and post
-
         // Create and add new thread
         let new_thread_id = <NextThreadId<T>>::get();
-
-        // Add inital post to thread
-        Self::add_new_post(new_thread_id, &text, author_id)?;
 
         // Get threads amount
         let child_threads_len = <DirectThreadsById<T>>::get(category_id).len();
@@ -683,6 +902,9 @@ impl<T: Trait> Module<T> {
         // Append thread id to category
         <DirectThreadsById<T>>::mutate(category_id, |value| value.push(new_thread_id));
 
+        // Add inital post to thread
+        Self::add_new_post(new_thread_id, &text, author_id)?;
+
         Ok(())
     }
 
@@ -703,11 +925,6 @@ impl<T: Trait> Module<T> {
         // Ensure category path is mutable
         Self::ensure_category_mutable(Some(thread.category_id))?;
 
-        // Reserve fee for post
-        let total_deposit = T::DepositPerPost::get().saturating_add(
-            <BalanceOf<T>>::from(text.len() as u32).saturating_mul(T::DepositTextPerByte::get()),
-        );
-
         // Make and add initial post
         let new_post_id = <NextPostId<T>>::get();
 
@@ -717,7 +934,7 @@ impl<T: Trait> Module<T> {
         // Build a post
         let new_post = Post {
             thread_id: thread_id,
-            current_text: text.clone(),
+            text: text.clone(),
             moderation: None,
             created_at: Self::current_block_and_time(),
             author_id: author_id,
@@ -779,7 +996,6 @@ impl<T: Trait> Module<T> {
     }
 
     fn ensure_thread_is_mutable(thread_id: &T::ThreadId) -> DispatchResult {
-        // Make sure thread exists
         let thread = Self::ensure_thread_exists(&thread_id)?;
 
         if thread.moderation.is_some() {
@@ -791,7 +1007,7 @@ impl<T: Trait> Module<T> {
 
     fn ensure_forum_sudo_set() -> DispatchResult {
         match <ForumSudo<T>>::get() {
-            Some(account_id) => Ok(()),
+            Some(_) => Ok(()),
             None => Err(Error::<T>::ForumSudoNotSet.into()),
         }
     }
@@ -810,7 +1026,7 @@ impl<T: Trait> Module<T> {
         account_id: &T::AccountId,
         forum_user_id: &T::ForumUserId,
     ) -> DispatchResult {
-        if <ForumUserById<T>>::exists(forum_user_id) {
+        if <ForumUserById<T>>::contains_key(forum_user_id) {
             if <ForumUserById<T>>::get(forum_user_id).role_account == *account_id {
                 Ok(())
             } else {
@@ -826,7 +1042,7 @@ impl<T: Trait> Module<T> {
         account_id: &T::AccountId,
         moderator_id: &T::ModeratorId,
     ) -> DispatchResult {
-        if <ModeratorById<T>>::exists(moderator_id) {
+        if <ModeratorById<T>>::contains_key(moderator_id) {
             if <ModeratorById<T>>::get(moderator_id).role_account == *account_id {
                 Ok(())
             } else {
@@ -834,16 +1050,6 @@ impl<T: Trait> Module<T> {
             }
         } else {
             Err(Error::<T>::OriginNotModerator.into())
-        }
-    }
-
-    // Ensure thread and its category mutable
-    fn ensure_thread_mutable(thread_id: T::ThreadId) -> DispatchResult {
-        let thread = <ThreadById<T>>::get(thread_id);
-        if thread.moderation.is_some() {
-            Err(Error::<T>::ThreadAlreadyModerated.into())
-        } else {
-            Self::ensure_category_mutable(Some(thread.category_id))
         }
     }
 
@@ -921,7 +1127,7 @@ impl<T: Trait> Module<T> {
         Post<T::ForumUserId, T::ModeratorId, T::ThreadId, T::BlockNumber, T::Moment>,
         &'static str,
     > {
-        if <PostById<T>>::exists(post_id) {
+        if <PostById<T>>::contains_key(post_id) {
             Ok(<PostById<T>>::get(post_id))
         } else {
             Err(Error::<T>::PostNotExisted.into())
@@ -934,7 +1140,7 @@ impl<T: Trait> Module<T> {
         Thread<T::ForumUserId, T::ModeratorId, T::CategoryId, T::BlockNumber, T::Moment>,
         &'static str,
     > {
-        if <ThreadById<T>>::exists(thread_id) {
+        if <ThreadById<T>>::contains_key(thread_id) {
             Ok(<ThreadById<T>>::get(thread_id))
         } else {
             Err(Error::<T>::ThreadNotExisted.into())
@@ -944,7 +1150,7 @@ impl<T: Trait> Module<T> {
     fn ensure_category_exists(
         category_id: &T::CategoryId,
     ) -> Result<Category<T::CategoryId, T::BlockNumber, T::Moment>, &'static str> {
-        if <CategoryById<T>>::exists(category_id) {
+        if <CategoryById<T>>::contains_key(category_id) {
             Ok(<CategoryById<T>>::get(category_id))
         } else {
             Err(Error::<T>::CategoryNotExisted.into())
