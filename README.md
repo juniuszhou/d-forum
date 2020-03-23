@@ -23,3 +23,7 @@ Some currency should be reserved when any forum user submit thread or post. The 
 ## Data migration
 The forum pallet may get lot of requirement and the need update the data structure.
 The process is implemented to migrate data from old version during runtime upgrade.
+
+## Future work
+1. More test cases in unit test module
+2. Integration test within runtime node

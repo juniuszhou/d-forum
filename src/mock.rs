@@ -91,10 +91,10 @@ impl balances::Trait for Runtime {
 }
 
 parameter_types! {
-    pub const DepositPerThread: u64 = 1_000;
-    pub const DepositPerPost: u64 = 1_000;
-    pub const DepositTitlePerByte: u64 = 1_000;
-    pub const DepositTextPerByte: u64 = 1_000;
+    pub const DepositPerThread: u64 = 0;
+    pub const DepositPerPost: u64 = 0;
+    pub const DepositTitlePerByte: u64 = 0;
+    pub const DepositTextPerByte: u64 = 0;
 }
 
 impl Trait for Runtime {
@@ -114,25 +114,15 @@ impl Trait for Runtime {
 #[derive(Clone)]
 pub enum OriginType {
     Signed(<Runtime as system::Trait>::AccountId),
-    //Inherent, <== did not find how to make such an origin yet
     Root,
 }
 
 pub fn mock_origin(origin: OriginType) -> mock::Origin {
     match origin {
         OriginType::Signed(account_id) => Origin::signed(account_id),
-        //OriginType::Inherent => Origin::inherent,
-        OriginType::Root => system::RawOrigin::Root.into(), //Origin::root
+        OriginType::Root => system::RawOrigin::Root.into(),
     }
 }
-
-pub const NOT_FORUM_SUDO_ORIGIN_ID: <Runtime as system::Trait>::AccountId = 111;
-
-pub const NOT_FORUM_SUDO_ORIGIN: OriginType = OriginType::Signed(NOT_FORUM_SUDO_ORIGIN_ID);
-
-pub const INVLAID_CATEGORY_ID: <Runtime as Trait>::CategoryId = 333;
-
-pub const NOT_REGISTER_MODERATOR_ID: <Runtime as Trait>::ModeratorId = 666;
 
 pub fn good_category_title() -> Vec<u8> {
     b"Great new category".to_vec()

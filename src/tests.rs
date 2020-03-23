@@ -27,6 +27,17 @@ fn create_moderator_account_id() {
 }
 
 #[test]
+// test the blockchain sudo account can update forum sudo
+fn set_forum_sudo() {
+    let config = default_genesis_config();
+    let forum_sudo = config.forum_sudo;
+    let origin = OriginType::Signed(forum_sudo);
+    build_test_externalities(config).execute_with(|| {
+        set_forum_sudo_mock(origin, Some(forum_sudo), Ok(()));
+    });
+}
+
+#[test]
 // test case for check if origin is forum sudo
 fn set_moderator_category_origin() {
     let config = default_genesis_config();
@@ -43,17 +54,6 @@ fn set_moderator_category_origin() {
             Ok(()),
         );
         set_moderator_category_mock(origin, moderator_id, category_id, true, Ok(()));
-    });
-}
-
-#[test]
-// test the blockchain sudo account can update forum sudo
-fn set_forum_sudo() {
-    let config = default_genesis_config();
-    let forum_sudo = config.forum_sudo;
-    let origin = OriginType::Signed(forum_sudo);
-    build_test_externalities(config).execute_with(|| {
-        set_forum_sudo_mock(origin, Some(forum_sudo), Ok(()));
     });
 }
 

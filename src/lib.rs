@@ -14,6 +14,8 @@ use frame_support::{
 use rstd::prelude::*;
 use sp_runtime;
 use sp_runtime::traits::{AtLeast32Bit, MaybeSerialize, Member, One, Saturating, Zero};
+use system;
+use system::ensure_signed;
 
 #[cfg(test)]
 mod mock;
@@ -148,9 +150,6 @@ decl_error! {
         CategoryCanNotModerate,
     }
 }
-
-use system;
-use system::{ensure_root, ensure_signed};
 
 /// Moderation action structure in old version.
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize, Debug))]
@@ -486,7 +485,10 @@ decl_module! {
 
         /// Set forum sudo.
         fn set_forum_sudo(origin, new_forum_sudo: Option<T::AccountId>) -> DispatchResult {
-            ensure_root(origin)?;
+            let who = ensure_signed(origin)?;
+
+            // Not signed by forum SUDO
+            Self::ensure_is_forum_sudo(&who)?;
 
             // Hold on to old value
             let old_forum_sudo = <ForumSudo<T>>::get().clone();
